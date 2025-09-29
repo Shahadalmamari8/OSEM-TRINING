@@ -9,10 +9,7 @@
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap');
         body { font-family: 'Inter', sans-serif; }
         .antialiased { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
-        .modal-enter { opacity: 0; transform: scale(0.95); }
-        .modal-enter-active { opacity: 1; transform: scale(1); transition: opacity 300ms, transform 300ms; }
-        .modal-exit { opacity: 1; transform: scale(1); }
-        .modal-exit-active { opacity: 0; transform: scale(0.95); transition: opacity 300ms, transform 300ms; }
+        /* No need for modal transitions here, simple display block/hidden is fine for quick file editing */
     </style>
 </head>
 <body class="bg-gray-50 antialiased min-h-screen">
@@ -28,7 +25,6 @@
         import { getFirestore, collection, doc, onSnapshot, setDoc, addDoc, updateDoc, query, writeBatch, Timestamp, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         // --- GLOBAL VARIABLES & CONFIG (MANDATORY USE) ---
-        // These variables are provided by the canvas environment
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-osem-app-id';
         const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
         const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
@@ -52,9 +48,13 @@
             isLoading: false,
             error: null,
             
-            // Admin State
+            // ADMIN STATE MANAGEMENT (NEW)
+            isAdmin: false, 
+            showLoginModal: false,
+            
+            // Admin Sub-State
             adminView: 'courses', // 'courses', 'certs'
-            editingCourse: null, // null or course object for editing/creating
+            editingCourse: null,
             
             // Catalog Filters
             searchTerm: '',
@@ -64,19 +64,18 @@
 
         // --- STATE MANAGEMENT AND RENDER LOOP ---
         function updateState(newState, forceRender = true) {
-            // Check if essential data arrays are changing, which always forces a full render
             const dataChanged = newState.hasOwnProperty('courses') || newState.hasOwnProperty('enrollments') || newState.hasOwnProperty('certificates');
             
             state = { ...state, ...newState };
 
-            // Only call render if a major state part changed
             if (forceRender || dataChanged) {
                 render();
             }
         }
 
         // --- UTILITIES & MOCK APIS ---
-
+        const ADMIN_ACCESS_KEY = "osemadmin"; // Hardcoded key for administrative login simulation
+        
         const uuidv4 = () => 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
             const r = Math.random() * 16 | 0;
             const v = c === 'x' ? r : (r & 0x3 | 0x8);
@@ -129,7 +128,6 @@
             clearTimeout(toast.timeout);
             toast.timeout = setTimeout(() => {
                 toast.classList.add('opacity-0');
-                // Remove from DOM after transition
                 setTimeout(() => toast.remove(), 300); 
             }, 4000);
         }
@@ -156,7 +154,8 @@
                 onAuthStateChanged(auth, async (user) => {
                     if (user) {
                         const uid = user.uid;
-                        const email = `user-${uid.substring(0, 8)}@osem.com`; // Mock email
+                        // For non-admin, anonymous sign-in is sufficient for student actions
+                        const email = `user-${uid.substring(0, 8)}@osem.com`;
                         updateState({ userId: uid, userEmail: email, isAuthReady: true });
                     } else {
                         try {
@@ -170,7 +169,6 @@
                             updateState({ userId: uuidv4(), isAuthReady: true, error: "Authentication failed." });
                             return;
                         }
-                        // Re-trigger listener for new user after sign-in
                     }
                 });
 
@@ -244,11 +242,11 @@
             }
         }
 
-        // --- ACTION HANDLERS ---
+        // --- ACTION HANDLERS (STUDENT) ---
         
         async function handleEnrollment(courseId, isWaitlist = false) {
             if (!state.db || !state.userId || state.isLoading) {
-                showMessage('error', "Authentication or processing in progress.");
+                showMessage('error', "Processing in progress. Try again.");
                 return;
             }
             const course = state.courses.find(c => c.id === courseId);
@@ -301,13 +299,32 @@
             }
         }
         
+        // --- ACTION HANDLERS (ADMIN) ---
+
+        function handleAdminLogin(key) {
+            if (key === ADMIN_ACCESS_KEY) {
+                updateState({ 
+                    isAdmin: true, 
+                    showLoginModal: false, 
+                    view: 'admin',
+                    userEmail: 'admin@osem.com' // Mock admin email
+                });
+                showMessage('success', "Admin access granted!");
+            } else {
+                showMessage('error', "Invalid Access Key. The demo key is 'osemadmin'.");
+            }
+        }
+
         async function issueCertificate(enrollment) {
-            if (!state.db || state.isLoading) return;
+            if (!state.db || state.isLoading || !state.isAdmin) return;
             
             updateState({ isLoading: true, error: null });
             try {
                 const course = state.courses.find(c => c.id === enrollment.courseId);
                 if (!course) throw new Error("Course not found.");
+
+                const existingCert = state.certificates.find(c => c.userId === enrollment.userId && c.courseId === course.id);
+                if (existingCert) throw new Error("Certificate already issued for this user.");
 
                 const issueDate = new Date();
                 const expirationDate = addDays(issueDate, 730); 
@@ -334,10 +351,11 @@
 
                 await batch.commit();
 
+                // Mock email sending
                 await sendCertificateEmail(enrollment.email, course.name);
                 await updateDoc(certRef, { emailSent: true }); 
 
-                showMessage('success', `Certificate for ${course.name} issued.`);
+                showMessage('success', `Certificate for ${course.name} issued to user ${enrollment.userId.substring(0, 8)}...`);
 
             } catch (e) {
                 console.error("Certificate issuance failed:", e);
@@ -347,8 +365,42 @@
             }
         }
 
+        async function saveCourse(courseData) {
+            if (!state.db || state.isLoading || !state.isAdmin) return;
+            updateState({ isLoading: true, error: null });
+
+            try {
+                const courseToSave = {
+                    ...courseData,
+                    capacity: parseInt(courseData.capacity || 20),
+                    price: parseFloat(courseData.price || 0),
+                    durationDays: parseInt(courseData.durationDays || 1),
+                    featured: !!courseData.featured,
+                };
+
+                if (courseData.id) {
+                    // Update existing course
+                    const courseRef = doc(state.db, 'artifacts', appId, 'public', 'data', 'courses', courseData.id);
+                    await updateDoc(courseRef, courseToSave);
+                    showMessage('success', `Course "${courseData.name}" updated successfully.`);
+                } else {
+                    // Add new course
+                    await addDoc(collection(state.db, 'artifacts', appId, 'public', 'data', 'courses'), {
+                        ...courseToSave,
+                        currentEnrollment: 0,
+                    });
+                    showMessage('success', `New course "${courseData.name}" created successfully.`);
+                }
+            } catch (e) {
+                console.error("Course save failed:", e);
+                showMessage('error', e.message || "Failed to save course.");
+            } finally {
+                updateState({ isLoading: false, editingCourse: null });
+            }
+        }
+        
         async function sendBulkExpirationReminders() {
-            if (!state.db || state.isLoading) return;
+            if (!state.db || state.isLoading || !state.isAdmin) return;
 
             const today = new Date();
             const ninetyDays = addDays(today, 90);
@@ -391,39 +443,6 @@
                 updateState({ isLoading: false });
             }
         }
-        
-        async function saveCourse(courseData) {
-            if (!state.db || state.isLoading) return;
-            updateState({ isLoading: true, error: null });
-
-            try {
-                const courseToSave = {
-                    ...courseData,
-                    capacity: parseInt(courseData.capacity || 20),
-                    price: parseFloat(courseData.price || 0),
-                    featured: !!courseData.featured,
-                };
-
-                if (courseData.id) {
-                    // Update existing course
-                    const courseRef = doc(state.db, 'artifacts', appId, 'public', 'data', 'courses', courseData.id);
-                    await updateDoc(courseRef, courseToSave);
-                    showMessage('success', `Course "${courseData.name}" updated successfully.`);
-                } else {
-                    // Add new course
-                    await addDoc(collection(state.db, 'artifacts', appId, 'public', 'data', 'courses'), {
-                        ...courseToSave,
-                        currentEnrollment: 0,
-                    });
-                    showMessage('success', `New course "${courseData.name}" created successfully.`);
-                }
-            } catch (e) {
-                console.error("Course save failed:", e);
-                showMessage('error', e.message || "Failed to save course.");
-            } finally {
-                updateState({ isLoading: false, editingCourse: null });
-            }
-        }
 
         // --- UI RENDERING FUNCTIONS ---
 
@@ -443,6 +462,13 @@
         }
 
         function Header() {
+            let adminButton;
+            if (state.isAdmin) {
+                adminButton = `<button class="text-red-500 hover:text-red-700 transition duration-150 font-bold" data-action="setView" data-view="admin">Admin Center</button>`;
+            } else {
+                adminButton = `<button class="text-gray-600 hover:text-emerald-600 transition duration-150 font-medium" data-action="toggleLoginModal">Admin Login</button>`;
+            }
+
             return `
                 <header class="bg-white shadow-md sticky top-0 z-40">
                     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3 flex justify-between items-center">
@@ -452,9 +478,9 @@
                         <nav class="hidden md:flex space-x-6 items-center">
                             <button class="text-gray-600 hover:text-emerald-600 transition duration-150 font-medium" data-action="setView" data-view="catalog">Course Catalog</button>
                             <button class="text-gray-600 hover:text-emerald-600 transition duration-150 font-medium" data-action="setView" data-view="dashboard">My Dashboard</button>
-                            <button class="text-red-500 hover:text-red-700 transition duration-150 font-medium" data-action="setView" data-view="admin">Admin</button>
+                            ${adminButton}
                             <div class="bg-blue-500 text-white text-xs font-bold px-3 py-1 rounded-full">
-                                User ID: ${state.userId ? state.userId.substring(0, 8) + '...' : 'Guest'}
+                                ${state.isAdmin ? 'Role: ADMIN' : 'Role: STUDENT'}
                             </div>
                         </nav>
                         <!-- Mobile Menu Icon (Hamburger) -->
@@ -465,7 +491,7 @@
                 </header>
             `;
         }
-        
+
         function CourseCard(course) {
             const enrollment = state.enrollments.find(e => e.userId === state.userId && e.courseId === course.id);
             const isFull = course.currentEnrollment >= course.capacity;
@@ -506,8 +532,6 @@
             `;
         }
         
-        // --- VIEW RENDERS ---
-
         function renderHomePage() {
             const featured = state.courses.filter(c => c.featured).slice(0, 3);
             const featuredHtml = featured.length > 0 ? `
@@ -755,7 +779,8 @@
                 <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 min-h-screen">
                     <h2 class="text-4xl font-bold text-gray-900 mb-8">My Professional Dashboard</h2>
                     <div class="bg-white p-6 rounded-xl shadow-lg mb-8">
-                        <p class="text-xl font-semibold text-gray-700">User ID: <span class="text-emerald-600 text-sm break-all">${state.userId}</span></p>
+                        <p class="text-xl font-semibold text-gray-700">User Role: <span class="text-blue-600">${state.isAdmin ? 'ADMIN' : 'STUDENT'}</span></p>
+                        <p class="text-lg text-gray-500">User ID: <span class="text-emerald-600 text-sm break-all">${state.userId}</span></p>
                         <p class="text-lg text-gray-500">Mock Email: ${state.userEmail}</p>
                     </div>
 
@@ -777,6 +802,20 @@
         }
 
         function renderAdminDashboard() {
+            if (!state.isAdmin) {
+                return `
+                    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 min-h-screen">
+                        <div class="bg-red-100 border-l-4 border-red-500 text-red-700 p-6 rounded-xl shadow-md" role="alert">
+                            <p class="font-bold text-xl">Access Denied</p>
+                            <p class="mt-2">You must be logged in as an administrator to access the Course Management and Certificate Tools.</p>
+                            <button class="mt-4 bg-red-500 text-white font-semibold px-4 py-2 rounded-lg hover:bg-red-600 transition" data-action="toggleLoginModal">
+                                Admin Login
+                            </button>
+                        </div>
+                    </div>
+                `;
+            }
+
             const expiringCertificates = state.certificates.filter(cert => {
                 const today = new Date();
                 const ninetyDays = addDays(today, 90);
@@ -967,7 +1006,7 @@
                             </label>
                         </div>
                         <label class="block mt-4">
-                            <span class="text-gray-700">Description</span>
+                            <span class="text-gray-700">Description (Flyer Details)</span>
                             <textarea name="description" required rows="3" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">${data.description}</textarea>
                         </label>
 
@@ -976,6 +1015,29 @@
                             <button type="submit" ${state.isLoading ? 'disabled' : ''} class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition disabled:bg-gray-400">
                                 ${state.isLoading ? 'Saving...' : (isEditing ? 'Save Changes' : 'Create Course')}
                             </button>
+                        </div>
+                    </form>
+                </div>
+            `;
+        }
+
+        function AdminLoginModal() {
+            if (!state.showLoginModal) return '';
+            
+            return `
+                <div class="fixed inset-0 bg-gray-900 bg-opacity-80 flex items-center justify-center z-50 p-4">
+                    <form id="adminLoginForm" class="bg-white p-8 rounded-xl shadow-2xl w-full max-w-sm">
+                        <h3 class="text-2xl font-bold mb-6 text-gray-900">Admin Login</h3>
+                        <p class="text-sm text-gray-600 mb-4 font-semibold">🔑 Demo Key: <span class="text-red-600 font-bold">osemadmin</span></p>
+                        
+                        <label class="block">
+                            <span class="text-gray-700 font-medium">Access Key</span>
+                            <input type="password" name="adminKey" required class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm p-3 border focus:ring-red-500 focus:border-red-500" />
+                        </label>
+
+                        <div class="mt-6 flex justify-end space-x-3">
+                            <button type="button" data-action="toggleLoginModal" class="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition">Cancel</button>
+                            <button type="submit" class="px-4 py-2 bg-red-600 text-white rounded-lg font-semibold hover:bg-red-700 transition">Log In</button>
                         </div>
                     </form>
                 </div>
@@ -1010,7 +1072,7 @@
                     break;
             }
             
-            let modalHtml = state.editingCourse ? CourseForm(state.editingCourse) : '';
+            let modalHtml = state.editingCourse ? CourseForm(state.editingCourse) : AdminLoginModal();
 
             // Main layout update
             appRoot.innerHTML = `
@@ -1050,20 +1112,23 @@
                 } else if (action === 'sendBulkReminders') {
                     sendBulkExpirationReminders();
                 } else if (action === 'createCourse') {
-                    updateState({ editingCourse: {} });
+                    updateState({ editingCourse: {}, showLoginModal: false });
                 } else if (action === 'editCourse') {
                     const courseId = target.getAttribute('data-course-id');
                     const course = state.courses.find(c => c.id === courseId);
-                    updateState({ editingCourse: course });
+                    updateState({ editingCourse: course, showLoginModal: false });
                 } else if (action === 'cancelEdit') {
-                    updateState({ editingCourse: null });
+                    updateState({ editingCourse: null, showLoginModal: false });
+                } else if (action === 'toggleLoginModal') {
+                    updateState({ showLoginModal: !state.showLoginModal, editingCourse: null });
                 } else if (action === 'issueCert') {
                     const courseId = target.getAttribute('data-course-id');
+                    // Find the first user who is enrolled and hasn't completed
                     const enrollment = state.enrollments.find(e => e.courseId === courseId && e.status === 'enrolled');
                     if (enrollment) {
                          issueCertificate(enrollment);
                     } else {
-                         showMessage('info', "No enrolled user found for this course to issue a certificate.");
+                         showMessage('info', "No 'enrolled' user found for this course to issue a certificate.");
                     }
                 }
             };
@@ -1074,7 +1139,9 @@
                 
                 if (state.view === 'catalog') {
                     if (action === 'setSearchTerm') {
-                        updateState({ searchTerm: target.value });
+                        // Debouncing for large applications would be ideal, but for now, direct update.
+                        updateState({ searchTerm: target.value }, false);
+                        render(); // Force re-render for search filter
                     } else if (action === 'setFilterSpecialty') {
                         updateState({ filterSpecialty: target.value });
                     } else if (action === 'setFilterLocation') {
@@ -1084,9 +1151,9 @@
             };
 
             appRoot.onsubmit = (e) => {
+                e.preventDefault();
+                
                 if (e.target.id === 'courseForm') {
-                    e.preventDefault();
-                    
                     const form = e.target;
                     const formData = new FormData(form);
                     const courseData = { id: state.editingCourse?.id };
@@ -1103,6 +1170,11 @@
                     }
                     
                     saveCourse(courseData);
+                } else if (e.target.id === 'adminLoginForm') {
+                    const form = e.target;
+                    const formData = new FormData(form);
+                    const key = formData.get('adminKey');
+                    handleAdminLogin(key);
                 }
             }
         }
