@@ -1,1187 +1,647 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OSEM Training Center Platform</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap');
-        body { font-family: 'Inter', sans-serif; }
-        .antialiased { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
-        /* No need for modal transitions here, simple display block/hidden is fine for quick file editing */
-    </style>
-</head>
-<body class="bg-gray-50 antialiased min-h-screen">
-    <div id="app-root">
-        <!-- Initial loading state, replaced by JavaScript -->
-        <div class="flex justify-center items-center h-screen text-xl text-gray-600">Initializing Application...</div>
+import React, { useState, useEffect, useMemo } from 'react';
+import { Home, Calendar, Users, Briefcase, BookOpen, Menu, X, DollarSign, Clock, MapPin, CheckCircle, BarChart2, Edit, Save } from 'lucide-react';
+
+// --- Firebase Imports ---
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
+import { getFirestore, doc, setDoc, addDoc, collection, query, onSnapshot, serverTimestamp } from 'firebase/firestore';
+
+// --- Placeholder Data & Mocks (This data will ideally be moved to Firestore as well) ---
+
+const calendarEvents = [
+  { id: 1, date: 'Oct 15', day: 'Mon', title: 'Python Fundamentals Start', time: 'Online', color: 'bg-indigo-500' },
+  { id: 2, date: 'Oct 18', day: 'Thu', title: 'Data Science Info Session', time: '7:00 PM EST', color: 'bg-green-500' },
+];
+
+const instructorsData = [
+  { id: 1, name: 'Dr. Evelyn Reed', title: 'Lead Data Science Instructor', description: 'Specializes in scalable machine learning and cloud infrastructure.', imageUrl: 'https://placehold.co/100x100/10b981/ffffff?text=ER', expertise: ['Machine Learning', 'Python'] },
+  { id: 2, name: 'Mr. Kenji Tanaka', title: 'Full Stack Development Specialist', description: 'An expert in modern web frameworks like React and Node.js.', imageUrl: 'https://placehold.co/100x100/3b82f6/ffffff?text=KT', expertise: ['React', 'Node.js', 'DevOps'] },
+];
+
+const coursesData = [
+    { id: 'c1', name: 'Advanced Python for Data', duration: '8 Weeks', price: 999, location: 'Online', specialty: 'Data Science' },
+    { id: 'c2', name: 'Modern React & Tailwind CSS', duration: '6 Weeks', price: 799, location: 'Online', specialty: 'Web Dev' },
+    { id: 'c3', name: 'User Experience (UX) Mastery', duration: '10 Weeks', price: 1200, location: 'In-Person (NY)', specialty: 'Design' },
+    { id: 'c4', name: 'Cloud Infrastructure with AWS', duration: '4 Weeks', price: 599, location: 'Online', specialty: 'DevOps' },
+];
+
+// --- Shared Components ---
+
+const EnrollmentFormModal = ({ course, onClose, onEnrollSubmit }) => {
+  const [formData, setFormData] = useState({
+    name: '', age: '', idNumber: '', placeOfWork: '', specialization: ''
+  });
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isSubmitted, setIsSubmitted] = useState(false);
+
+  const handleChange = (e) => {
+    const { name, value } = e.target;
+    setFormData(prev => ({ ...prev, [name]: value }));
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setIsSubmitting(true);
+    
+    // Call the real submit handler which includes Firestore logic
+    await onEnrollSubmit(course.id, formData);
+
+    setIsSubmitting(false);
+    setIsSubmitted(true);
+    
+    // Close after a delay
+    setTimeout(onClose, 3000); 
+  };
+
+  return (
+    <div className="fixed inset-0 bg-gray-900 bg-opacity-80 flex items-center justify-center z-50 p-4">
+      <div className="bg-white p-6 sm:p-8 rounded-xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
+        
+        <div className="flex justify-between items-center mb-6 border-b pb-3">
+          <h3 className="text-2xl font-bold text-indigo-700">Enrollment Form</h3>
+          <button onClick={onClose} className="text-gray-500 hover:text-gray-800 transition">
+            <X className="w-6 h-6" />
+          </button>
+        </div>
+
+        <p className="mb-4 text-gray-600">Registering for: <span className="font-semibold text-indigo-600">{course.name}</span></p>
+
+        {isSubmitted ? (
+            <div className="text-center py-10">
+                <CheckCircle className="w-16 h-16 mx-auto text-green-500 mb-4" />
+                <h4 className="text-xl font-bold text-gray-800">Registration Confirmed!</h4>
+                <p className="text-gray-600 mt-2">We have received your details and will contact you shortly.</p>
+            </div>
+        ) : (
+            <form onSubmit={handleSubmit} className="space-y-4">
+            
+            <label className="block">
+                <span className="text-gray-700 font-medium">Full Name</span>
+                <input type="text" name="name" value={formData.name} onChange={handleChange} required className="mt-1 block w-full rounded-lg border-gray-300 shadow-sm p-3 border focus:ring-indigo-500 focus:border-indigo-500" />
+            </label>
+            <div className="grid grid-cols-2 gap-4">
+                <label className="block">
+                    <span className="text-gray-700 font-medium">Age</span>
+                    <input type="number" name="age" value={formData.age} onChange={handleChange} required className="mt-1 block w-full rounded-lg border-gray-300 shadow-sm p-3 border focus:ring-indigo-500 focus:border-indigo-500" />
+                </label>
+                <label className="block">
+                    <span className="text-gray-700 font-medium">ID Number</span>
+                    <input type="text" name="idNumber" value={formData.idNumber} onChange={handleChange} required className="mt-1 block w-full rounded-lg border-gray-300 shadow-sm p-3 border focus:ring-indigo-500 focus:border-indigo-500" />
+                </label>
+            </div>
+            <label className="block">
+                <span className="text-gray-700 font-medium">Place of Work</span>
+                <input type="text" name="placeOfWork" value={formData.placeOfWork} onChange={handleChange} required className="mt-1 block w-full rounded-lg border-gray-300 shadow-sm p-3 border focus:ring-indigo-500 focus:border-indigo-500" />
+            </label>
+            <label className="block">
+                <span className="text-gray-700 font-medium">Specialization / Role</span>
+                <input type="text" name="specialization" value={formData.specialization} onChange={handleChange} required className="mt-1 block w-full rounded-lg border-gray-300 shadow-sm p-3 border focus:ring-indigo-500 focus:border-indigo-500" />
+            </label>
+
+            <div className="pt-4">
+                <button 
+                    type="submit" 
+                    disabled={isSubmitting}
+                    className="w-full bg-indigo-600 text-white py-3 rounded-lg font-semibold hover:bg-indigo-700 transition duration-150 shadow-md disabled:bg-gray-400 disabled:cursor-not-allowed"
+                >
+                    {isSubmitting ? 'Processing...' : `Complete Registration for $${course.price}`}
+                </button>
+            </div>
+            </form>
+        )}
+      </div>
+    </div>
+  );
+};
+
+// --- General Site Components (Calendar, Catalog, Instructors) ---
+// (Unchanged from previous version, using placeholder data)
+
+const CalendarSection = () => (
+    <div className="bg-white p-6 rounded-xl shadow-lg border border-gray-100">
+      <div className="flex items-center text-xl font-bold mb-4 text-gray-900">
+        <Calendar className="w-6 h-6 mr-3 text-indigo-600" />
+        Upcoming Course Calendar
+      </div>
+      <div className="space-y-4">
+        {calendarEvents.map(event => (
+          <div key={event.id} className="flex items-start space-x-4 p-3 rounded-lg hover:bg-gray-50 transition border-b last:border-b-0">
+            <div className={`flex-shrink-0 w-12 h-12 flex flex-col items-center justify-center rounded-lg text-white ${event.color} shadow-md`}>
+              <span className="text-xs font-light">{event.day}</span>
+              <span className="text-lg font-bold -mt-1">{event.date.split(' ')[1]}</span>
+            </div>
+            <div className="flex-grow">
+              <p className="text-base font-semibold text-gray-900">{event.title}</p>
+              <p className="text-sm text-gray-500">{event.time}</p>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+);
+
+const CourseCatalogSection = ({ onEnrollClick }) => (
+    <div className="bg-white p-6 rounded-xl shadow-lg border border-gray-100">
+        <div className="flex items-center text-xl font-bold mb-6 text-gray-900 border-b pb-2">
+            <BookOpen className="w-6 h-6 mr-3 text-indigo-600" />
+            Available Courses for Registration
+        </div>
+        <div className="space-y-6">
+            {coursesData.map(course => (
+                <div key={course.id} className="p-4 bg-gray-50 rounded-lg shadow-sm flex flex-col sm:flex-row justify-between items-start sm:items-center border border-gray-200">
+                    <div className="mb-3 sm:mb-0">
+                        <p className="text-lg font-bold text-gray-800">{course.name}</p>
+                        <div className="flex space-x-4 text-sm text-gray-600 mt-1">
+                            <span className="flex items-center"><Clock className="w-4 h-4 mr-1 text-indigo-500" /> {course.duration}</span>
+                            <span className="flex items-center"><MapPin className="w-4 h-4 mr-1 text-indigo-500" /> {course.location}</span>
+                        </div>
+                    </div>
+                    <div className="flex items-center space-x-4">
+                        <span className="text-xl font-extrabold text-green-600"><DollarSign className="w-5 h-5 inline-block -mt-1" />{course.price}</span>
+                        <button 
+                            onClick={() => onEnrollClick(course)}
+                            className="bg-indigo-600 text-white px-5 py-2 rounded-lg font-semibold hover:bg-indigo-700 transition duration-150 shadow-md"
+                        >
+                            Enroll Now
+                        </button>
+                    </div>
+                </div>
+            ))}
+        </div>
+    </div>
+);
+
+const InstructorsSection = () => (
+    <div className="bg-white p-6 rounded-xl shadow-lg border border-gray-100">
+        <div className="flex items-center text-xl font-bold mb-6 text-gray-900 border-b pb-2">
+            <Users className="w-6 h-6 mr-3 text-indigo-600" />
+            Expert Instructors
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+            {instructorsData.slice(0, 2).map(instructor => (
+                <div key={instructor.id} className="flex items-center p-3 space-x-4 border border-gray-200 rounded-lg bg-gray-50">
+                    <img
+                        src={instructor.imageUrl}
+                        alt={`Profile of ${instructor.name}`}
+                        className="w-16 h-16 rounded-full object-cover border-2 border-indigo-300"
+                        onError={(e) => { e.target.onerror = null; e.target.src = 'https://placehold.co/64x64/6366f1/ffffff?text=NA'; }}
+                    />
+                    <div>
+                        <h4 className="text-base font-bold text-gray-900">{instructor.name}</h4>
+                        <p className="text-sm font-medium text-indigo-600">{instructor.title}</p>
+                        <div className="flex flex-wrap gap-1 mt-1">
+                            {instructor.expertise.map((skill, index) => (
+                                <span key={index} className="px-2 py-0.5 text-xs bg-indigo-100 text-indigo-800 rounded-full">
+                                  {skill}
+                                </span>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            ))}
+        </div>
+        <p className="mt-4 text-center">
+            <button 
+                className="text-indigo-600 hover:text-indigo-800 font-medium text-sm transition"
+            >
+                View All Instructors &rarr;
+            </button>
+        </p>
+    </div>
+);
+
+const GeneralHomeView = ({ onEnrollClick }) => (
+  <div className="space-y-10">
+    {/* Hero Section */}
+    <div className="bg-indigo-700 text-white p-8 sm:p-12 rounded-2xl shadow-xl text-center">
+        <h2 className="text-4xl sm:text-5xl font-extrabold mb-3">Your Path to Expert Certification</h2>
+        <p className="text-xl text-indigo-200 max-w-3xl mx-auto">Discover professional training, track your progress, and connect with top industry mentors.</p>
     </div>
 
-    <script type="module">
-        // Import Firebase modules
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, collection, doc, onSnapshot, setDoc, addDoc, updateDoc, query, writeBatch, Timestamp, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+    {/* Content Grid */}
+    <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        <div className="lg:col-span-2 space-y-8">
+            <CourseCatalogSection onEnrollClick={onEnrollClick} />
+            <CalendarSection />
+        </div>
+        <div className="lg:col-span-1">
+            <InstructorsSection />
+        </div>
+    </div>
+  </div>
+);
 
-        // --- GLOBAL VARIABLES & CONFIG (MANDATORY USE) ---
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-osem-app-id';
-        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
-        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
-        
-        const appRoot = document.getElementById('app-root');
+// --- Admin Components ---
 
-        // --- GLOBAL STATE ---
-        let state = {
-            db: null,
-            auth: null,
-            userId: null,
-            isAuthReady: false,
-            userEmail: "anonymous@osem.com",
-            
-            courses: [],
-            enrollments: [],
-            certificates: [],
-            
-            view: 'home', // 'home', 'catalog', 'details', 'dashboard', 'admin'
-            selectedCourse: null,
-            isLoading: false,
-            error: null,
-            
-            // ADMIN STATE MANAGEMENT (NEW)
-            isAdmin: false, 
-            showLoginModal: false,
-            
-            // Admin Sub-State
-            adminView: 'courses', // 'courses', 'certs'
-            editingCourse: null,
-            
-            // Catalog Filters
-            searchTerm: '',
-            filterSpecialty: 'All',
-            filterLocation: 'All',
-        };
+const AdminManagementForm = ({ title, placeholder, onSave }) => {
+    const [content, setContent] = useState(placeholder);
+    const [status, setStatus] = useState(null);
 
-        // --- STATE MANAGEMENT AND RENDER LOOP ---
-        function updateState(newState, forceRender = true) {
-            const dataChanged = newState.hasOwnProperty('courses') || newState.hasOwnProperty('enrollments') || newState.hasOwnProperty('certificates');
+    const handleSave = () => {
+        // Mock save for placeholder data
+        console.log(`Saving ${title}:`, content);
+        setStatus('Saved!');
+        setTimeout(() => setStatus(null), 2000);
+        onSave(content); // Call parent handler if needed
+    };
+
+    return (
+        <div className="p-4 border border-indigo-200 bg-indigo-50 rounded-lg">
+            <h4 className="font-semibold text-indigo-700 mb-2">{title}</h4>
+            <textarea
+                value={content}
+                onChange={(e) => setContent(e.target.value)}
+                rows="5"
+                className="w-full p-2 border rounded-lg resize-none focus:ring-indigo-500 focus:border-indigo-500"
+            />
+            <div className="flex justify-between items-center mt-3">
+                <button
+                    onClick={handleSave}
+                    className="flex items-center bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-indigo-700 transition"
+                >
+                    <Save className="w-4 h-4 mr-2" /> Save Changes
+                </button>
+                {status && <span className="text-green-600 font-medium text-sm">{status}</span>}
+            </div>
+        </div>
+    );
+};
+
+const AdminDataAnalysis = ({ registrations }) => {
+    const totalRegistrations = registrations.length;
+    
+    // Simple analysis: Registrations by Specialization
+    const analysis = useMemo(() => {
+        return registrations.reduce((acc, reg) => {
+            const spec = reg.specialization || 'Unknown';
+            acc[spec] = (acc[spec] || 0) + 1;
+            return acc;
+        }, {});
+    }, [registrations]);
+
+    const registrationTable = registrations.slice().sort((a, b) => b.registeredAt?.toDate() - a.registeredAt?.toDate());
+
+    return (
+        <div className="space-y-8">
+            <h3 className="text-2xl font-bold text-gray-900 flex items-center mb-4">
+                <BarChart2 className="w-6 h-6 mr-2 text-indigo-600" /> Analytics Summary
+            </h3>
             
-            state = { ...state, ...newState };
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div className="p-5 bg-green-500 text-white rounded-xl shadow-lg">
+                    <p className="text-sm font-medium opacity-80">Total Enrollments</p>
+                    <p className="text-3xl font-extrabold mt-1">{totalRegistrations}</p>
+                </div>
+                <div className="p-5 bg-blue-500 text-white rounded-xl shadow-lg">
+                    <p className="text-sm font-medium opacity-80">Courses Offered</p>
+                    <p className="text-3xl font-extrabold mt-1">{coursesData.length}</p>
+                </div>
+                <div className="p-5 bg-yellow-500 text-white rounded-xl shadow-lg">
+                    <p className="text-sm font-medium opacity-80">Top Specialization</p>
+                    <p className="text-3xl font-extrabold mt-1">
+                        {Object.keys(analysis).length > 0 ? 
+                            Object.keys(analysis).reduce((a, b) => analysis[a] > analysis[b] ? a : b) : 'N/A'}
+                    </p>
+                </div>
+            </div>
 
-            if (forceRender || dataChanged) {
-                render();
-            }
-        }
+            <div className="bg-white p-6 rounded-xl shadow-lg">
+                <h4 className="text-xl font-bold mb-4">Recent Registrations (Live Feed)</h4>
+                <div className="overflow-x-auto">
+                    <table className="min-w-full divide-y divide-gray-200">
+                        <thead className="bg-gray-50">
+                            <tr>
+                                {['Date', 'Name', 'Course', 'Specialization', 'Status'].map(header => (
+                                    <th key={header} className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{header}</th>
+                                ))}
+                            </tr>
+                        </thead>
+                        <tbody className="bg-white divide-y divide-gray-200">
+                            {registrationTable.map(reg => (
+                                <tr key={reg.id} className="hover:bg-gray-50">
+                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                        {reg.registeredAt ? new Date(reg.registeredAt.seconds * 1000).toLocaleDateString() : 'N/A'}
+                                    </td>
+                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{reg.name}</td>
+                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-indigo-600 font-medium">{reg.courseName}</td>
+                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{reg.specialization}</td>
+                                    <td className="px-6 py-4 whitespace-nowrap">
+                                        <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${reg.status === 'Pending Review' ? 'bg-yellow-100 text-yellow-800' : 'bg-green-100 text-green-800'}`}>
+                                            {reg.status}
+                                        </span>
+                                    </td>
+                                </tr>
+                            ))}
+                            {totalRegistrations === 0 && (
+                                <tr>
+                                    <td colSpan="5" className="px-6 py-4 text-center text-gray-500">No registrations found yet.</td>
+                                </tr>
+                            )}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    );
+};
 
-        // --- UTILITIES & MOCK APIS ---
-        const ADMIN_ACCESS_KEY = "osemadmin"; // Hardcoded key for administrative login simulation
-        
-        const uuidv4 = () => 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
-            const r = Math.random() * 16 | 0;
-            const v = c === 'x' ? r : (r & 0x3 | 0x8);
-            return v.toString(16);
+const AdminView = ({ registrations }) => {
+    return (
+        <div className="space-y-10">
+            <h2 className="text-3xl font-extrabold text-indigo-700 border-b pb-2">Admin Dashboard</h2>
+
+            {/* Section 1: Data Analysis */}
+            <AdminDataAnalysis registrations={registrations} />
+
+            {/* Section 2: Content Management */}
+            <div className="space-y-6">
+                <h3 className="text-2xl font-bold text-gray-900 flex items-center pt-4">
+                    <Edit className="w-6 h-6 mr-2 text-indigo-600" /> Content Management
+                </h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <AdminManagementForm 
+                        title="Course Descriptions & Flyers" 
+                        placeholder={coursesData.map(c => `${c.id}: ${c.name}`).join('\n') + "\n\n(Use this section to edit course details/add flyer links)"}
+                        onSave={(content) => console.log('Course content updated:', content)}
+                    />
+                    <AdminManagementForm 
+                        title="Calendar Updates" 
+                        placeholder={calendarEvents.map(e => `${e.date}: ${e.title}`).join('\n') + "\n\n(Edit/add new events here)"}
+                        onSave={(content) => console.log('Calendar updated:', content)}
+                    />
+                    <AdminManagementForm 
+                        title="Instructor Details" 
+                        placeholder={instructorsData.map(i => `${i.id}: ${i.name}, ${i.title}`).join('\n') + "\n\n(Update instructor profiles/bios)"}
+                        onSave={(content) => console.log('Instructors updated:', content)}
+                    />
+                </div>
+            </div>
+        </div>
+    );
+};
+
+
+// --- Main Application Component ---
+
+const Sidebar = ({ currentPage, setCurrentPage, isSidebarOpen, setIsSidebarOpen, isAuthReady, isAdmin }) => {
+  const baseMenuItems = [
+    { name: 'Overview', page: 'home', Icon: Home },
+    { name: 'My Dashboard', page: 'dashboard', Icon: BookOpen },
+    { name: 'Careers', page: 'careers', Icon: Briefcase },
+  ];
+  
+  const adminMenuItem = { name: 'Admin Dashboard', page: 'admin', Icon: BarChart2 };
+  
+  const menuItems = isAuthReady && isAdmin ? [...baseMenuItems, adminMenuItem] : baseMenuItems;
+
+  return (
+    <div className={`${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'} fixed inset-y-0 left-0 z-30 w-64 bg-white border-r border-gray-200 p-4 transform transition-transform duration-300 ease-in-out
+                   lg:relative lg:translate-x-0 lg:flex-shrink-0 lg:w-64 flex flex-col h-full`}>
+
+      <div className="flex justify-end lg:hidden mb-4">
+        <button onClick={() => setIsSidebarOpen(false)} className="text-gray-500 hover:text-gray-700 p-2 rounded-full hover:bg-gray-100 transition">
+          <X className="w-6 h-6" />
+        </button>
+      </div>
+
+      <div className="text-2xl font-bold text-indigo-700 mb-8">
+        Learner Hub
+      </div>
+
+      <nav className="flex-1 space-y-2">
+        {menuItems.map(({ name, page, Icon }) => {
+          const isActive = currentPage === page;
+          return (
+            <button
+              key={page}
+              onClick={() => {
+                setCurrentPage(page);
+                setIsSidebarOpen(false); 
+              }}
+              className={`flex items-center w-full p-3 rounded-xl transition duration-150 ease-in-out
+                ${isActive
+                  ? 'bg-indigo-500 text-white shadow-md'
+                  : 'text-gray-600 hover:bg-gray-100 hover:text-indigo-600'
+                }`}
+            >
+              <Icon className="w-5 h-5 mr-3" />
+              <span className="font-medium">{name}</span>
+            </button>
+          );
+        })}
+      </nav>
+      
+      <div className="mt-8 pt-4 border-t border-gray-100">
+        <p className="text-xs text-gray-400">Auth Status: {isAuthReady ? 'Ready' : 'Initializing...'}</p>
+        <p className="text-xs text-gray-400">User ID: {isAuthReady ? '...' + (userId || 'N/A').slice(-8) : 'N/A'}</p>
+      </div>
+    </div>
+  );
+};
+
+const PageContent = ({ currentPage, onEnrollClick, registrations }) => {
+  let content;
+
+  switch (currentPage) {
+    case 'home':
+      content = <GeneralHomeView onEnrollClick={onEnrollClick} />;
+      break;
+    case 'dashboard':
+      content = (
+        <div className="space-y-4">
+          <h2 className="text-3xl font-extrabold text-gray-900">My Dashboard (Student/User)</h2>
+          <div className="p-6 bg-yellow-50 border border-yellow-200 text-yellow-800 rounded-lg">
+            <p className="font-semibold">User Content Placeholder:</p>
+            <p>This is where users can track their enrolled courses and progress.</p>
+          </div>
+        </div>
+      );
+      break;
+    case 'admin':
+        content = <AdminView registrations={registrations} />;
+        break;
+    case 'careers':
+      content = (
+        <div className="space-y-4">
+          <h2 className="text-3xl font-extrabold text-gray-900">Career Resources</h2>
+          <p className="text-gray-600">Access job boards, resume builders, and interview tips here.</p>
+        </div>
+      );
+      break;
+    default:
+      content = <GeneralHomeView onEnrollClick={onEnrollClick} />;
+  }
+
+  return (
+    <main className="flex-1 p-4 sm:p-8 lg:p-10 overflow-y-auto">
+      <div className="max-w-7xl mx-auto">
+        {content}
+      </div>
+    </main>
+  );
+};
+
+
+const App = () => {
+  const [currentPage, setCurrentPage] = useState('home');
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  
+  // Firebase State
+  const [db, setDb] = useState(null);
+  const [auth, setAuth] = useState(null);
+  const [userId, setUserId] = useState(null);
+  const [isAuthReady, setIsAuthReady] = useState(false);
+  const [registrations, setRegistrations] = useState([]); // Live registrations from Firestore
+
+  // Enrollment State
+  const [showEnrollmentModal, setShowEnrollmentModal] = useState(false);
+  const [selectedCourseToEnroll, setSelectedCourseToEnroll] = useState(null);
+  
+  const isAdmin = isAuthReady && !!userId; // Simplified admin check: if authenticated, you're an admin in this prototype
+
+  // --- Firebase Initialization and Auth ---
+  useEffect(() => {
+      document.body.className = 'bg-gray-50';
+      document.documentElement.style.fontFamily = 'Inter, sans-serif';
+
+      try {
+          const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+          const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+
+          if (Object.keys(firebaseConfig).length === 0) {
+              console.error("Firebase config is missing.");
+              setIsAuthReady(true); // Complete auth process even if it fails
+              return;
+          }
+
+          const app = initializeApp(firebaseConfig);
+          const firestoreDb = getFirestore(app);
+          const firebaseAuth = getAuth(app);
+
+          setDb(firestoreDb);
+          setAuth(firebaseAuth);
+
+          const unsubscribe = onAuthStateChanged(firebaseAuth, async (user) => {
+              if (user) {
+                  setUserId(user.uid);
+              } else {
+                  if (typeof __initial_auth_token !== 'undefined') {
+                      await signInWithCustomToken(firebaseAuth, __initial_auth_token).catch(e => console.error("Custom token sign-in failed:", e));
+                  } else {
+                      await signInAnonymously(firebaseAuth).catch(e => console.error("Anonymous sign-in failed:", e));
+                  }
+              }
+              setIsAuthReady(true);
+          });
+
+          return () => unsubscribe();
+      } catch (error) {
+          console.error("Firebase setup failed:", error);
+          setIsAuthReady(true);
+      }
+  }, []);
+
+  // --- Fetch Registrations for Admin Dashboard (Live Firestore Listener) ---
+  useEffect(() => {
+      if (isAuthReady && db && isAdmin) {
+          const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+          // Using a public collection for multi-user visibility (e.g., admin and other staff)
+          const collectionPath = `/artifacts/${appId}/public/data/registrations`;
+          
+          const q = query(collection(db, collectionPath));
+
+          const unsubscribe = onSnapshot(q, (snapshot) => {
+              const fetchedRegistrations = snapshot.docs.map(doc => ({
+                  id: doc.id,
+                  ...doc.data()
+              }));
+              setRegistrations(fetchedRegistrations);
+          }, (error) => {
+              console.error("Error fetching registrations:", error);
+          });
+
+          return () => unsubscribe();
+      }
+  }, [isAuthReady, db, isAdmin]);
+  
+  // --- Handlers ---
+  const handleEnrollClick = (course) => {
+    setSelectedCourseToEnroll(course);
+    setShowEnrollmentModal(true);
+  };
+  
+  const handleEnrollmentSubmit = async (courseId, studentData) => {
+    if (!db) {
+        console.error("Firestore not initialized. Cannot save registration.");
+        return;
+    }
+    
+    // Use a public collection for registrations
+    const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+    const collectionPath = `/artifacts/${appId}/public/data/registrations`;
+    const userIdentifier = userId || 'anonymous-' + Math.random().toString(36).substring(2, 9);
+
+    try {
+        await addDoc(collection(db, collectionPath), {
+            ...studentData,
+            courseId: courseId,
+            courseName: coursesData.find(c => c.id === courseId)?.name || 'Unknown Course',
+            registeredAt: serverTimestamp(),
+            status: 'Pending Review',
+            userId: userIdentifier
         });
-
-        const addDays = (date, days) => {
-            const result = new Date(date);
-            result.setDate(result.getDate() + days);
-            return result;
-        };
-        
-        // Mock payment processing via Stripe
-        const processStripePayment = async (courseId, amount) => {
-            console.log(`MOCK: Processing Stripe payment for Course ID: ${courseId}, Amount: $${amount}`);
-            await new Promise(resolve => setTimeout(resolve, 1500)); // Simulate network delay
-            return { success: true, transactionId: uuidv4() };
-        };
-
-        // Mock email service for certificate delivery
-        const sendCertificateEmail = async (userEmail, courseName) => {
-            console.log(`MOCK: Sending Certificate Email to ${userEmail} for ${courseName}`);
-            await new Promise(resolve => setTimeout(resolve, 500));
-            return { success: true };
-        };
-
-        // Mock email service for expiration reminders
-        const sendExpirationReminder = async (userEmail, courseName) => {
-            console.log(`MOCK: Sending Expiration Reminder Email to ${userEmail} for ${courseName}`);
-            await new Promise(resolve => setTimeout(resolve, 500));
-            return { success: true };
-        };
-        
-        // Custom Alert/Toast (replacing window.alert)
-        function showMessage(type, message) {
-            const toastId = 'app-toast';
-            let toast = document.getElementById(toastId);
-            if (!toast) {
-                toast = document.createElement('div');
-                toast.id = toastId;
-                toast.className = 'fixed top-4 right-4 z-50 p-4 rounded-lg shadow-xl text-white font-semibold transition-opacity duration-300';
-                document.body.appendChild(toast);
-            }
-
-            const bgColor = type === 'success' ? 'bg-emerald-600' : type === 'error' ? 'bg-red-600' : 'bg-blue-600';
-            
-            toast.className = `fixed top-4 right-4 z-50 p-4 rounded-lg shadow-xl text-white font-semibold transition-opacity duration-300 opacity-100 ${bgColor}`;
-            toast.innerHTML = message;
-
-            clearTimeout(toast.timeout);
-            toast.timeout = setTimeout(() => {
-                toast.classList.add('opacity-0');
-                setTimeout(() => toast.remove(), 300); 
-            }, 4000);
-        }
-
-        // --- FIREBASE INITIALIZATION AND LISTENERS ---
-
-        let app, db, auth;
-
-        async function initFirebase() {
-            if (Object.keys(firebaseConfig).length === 0) {
-                console.error("Firebase config is missing.");
-                updateState({ isAuthReady: true, error: "Database config missing." });
-                return;
-            }
-
-            setLogLevel('Debug');
-            try {
-                app = initializeApp(firebaseConfig);
-                db = getFirestore(app);
-                auth = getAuth(app);
-                updateState({ db, auth }, false);
-
-                // Authentication Listener
-                onAuthStateChanged(auth, async (user) => {
-                    if (user) {
-                        const uid = user.uid;
-                        // For non-admin, anonymous sign-in is sufficient for student actions
-                        const email = `user-${uid.substring(0, 8)}@osem.com`;
-                        updateState({ userId: uid, userEmail: email, isAuthReady: true });
-                    } else {
-                        try {
-                            if (initialAuthToken) {
-                                await signInWithCustomToken(auth, initialAuthToken);
-                            } else {
-                                await signInAnonymously(auth);
-                            }
-                        } catch (e) {
-                            console.error("Failed to sign in:", e);
-                            updateState({ userId: uuidv4(), isAuthReady: true, error: "Authentication failed." });
-                            return;
-                        }
-                    }
-                });
-
-                setupFirestoreListeners();
-            } catch (e) {
-                console.error("Firebase initialization failed:", e);
-                updateState({ isAuthReady: true, error: "Failed to connect to the training center database." });
-            }
-        }
-        
-        function setupFirestoreListeners() {
-            // 1. Courses (Public Data)
-            const coursesRef = collection(db, 'artifacts', appId, 'public', 'data', 'courses');
-            onSnapshot(coursesRef, (snapshot) => {
-                const courseList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                updateState({ courses: courseList });
-                if (courseList.length === 0) seedInitialCourses(coursesRef);
-            }, (e) => {
-                console.error("Error fetching courses:", e);
-                updateState({ error: "Could not load course catalog." });
-            });
-
-            // 2. Enrollments (Public Data)
-            const enrollmentsRef = collection(db, 'artifacts', appId, 'public', 'data', 'enrollments');
-            onSnapshot(enrollmentsRef, (snapshot) => {
-                const enrollmentList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                updateState({ enrollments: enrollmentList });
-            }, (e) => {
-                console.error("Error fetching enrollments:", e);
-                updateState({ error: "Could not load enrollment data." });
-            });
-
-            // 3. Certificates (Public Data)
-            const certificatesRef = collection(db, 'artifacts', appId, 'public', 'data', 'certificates');
-            onSnapshot(certificatesRef, (snapshot) => {
-                const certList = snapshot.docs.map(doc => ({ 
-                    id: doc.id, 
-                    ...doc.data(),
-                    issueDate: doc.data().issueDate?.toDate(),
-                    expirationDate: doc.data().expirationDate?.toDate(),
-                }));
-                updateState({ certificates: certList });
-            }, (e) => {
-                console.error("Error fetching certificates:", e);
-                updateState({ error: "Could not load certificate data." });
-            });
-        }
-
-        async function seedInitialCourses(coursesRef) {
-            if (state.courses.length > 0) return; 
-            
-            console.log("Seeding initial course data...");
-            const initialCourses = [
-                { name: "Advanced Cardiac Life Support (ACLS)", specialty: "Emergency", provider: "AHA", description: "Comprehensive course on managing cardiopulmonary emergencies.", capacity: 20, currentEnrollment: 5, price: 350.00, durationDays: 2, featured: true, location: "Online", date: "2025-10-15" },
-                { name: "Basic Life Support (BLS)", specialty: "Fundamentals", provider: "ARC", description: "Covers CPR, AED use, and relieving choking in adults, children, and infants.", capacity: 30, currentEnrollment: 15, price: 85.00, durationDays: 1, featured: true, location: "In-Person (NY)", date: "2025-11-01" },
-                { name: "Pediatric Advanced Life Support (PALS)", specialty: "Pediatrics", provider: "AAP", description: "Focused on improving outcomes for pediatric patients with critical illnesses.", capacity: 15, currentEnrollment: 10, price: 420.00, durationDays: 2, featured: false, location: "Online", date: "2025-10-22" },
-                { name: "Phlebotomy Technician Certification", specialty: "Laboratory", provider: "NHA", description: "Training for professional blood collection and processing.", capacity: 25, currentEnrollment: 20, price: 650.00, durationDays: 5, featured: false, location: "In-Person (CA)", date: "2025-12-05" },
-            ];
-
-            const batch = writeBatch(db);
-            initialCourses.forEach(course => {
-                const newDocRef = doc(coursesRef);
-                batch.set(newDocRef, course);
-            });
-
-            try {
-                await batch.commit();
-                console.log("Initial courses successfully seeded.");
-            } catch (e) {
-                console.error("Error seeding data:", e);
-            }
-        }
-
-        // --- ACTION HANDLERS (STUDENT) ---
-        
-        async function handleEnrollment(courseId, isWaitlist = false) {
-            if (!state.db || !state.userId || state.isLoading) {
-                showMessage('error', "Processing in progress. Try again.");
-                return;
-            }
-            const course = state.courses.find(c => c.id === courseId);
-            if (!course) return showMessage('error', "Course not found.");
-
-            const existingEnrollment = state.enrollments.find(e => e.userId === state.userId && e.courseId === courseId);
-            if (existingEnrollment) {
-                return showMessage('info', `You are already ${existingEnrollment.status} for this course.`);
-            }
-
-            updateState({ isLoading: true, error: null });
-
-            try {
-                // 1. MOCK Payment
-                const paymentResult = await processStripePayment(course.id, course.price);
-                if (!paymentResult.success) {
-                    throw new Error("Payment failed. Please try again.");
-                }
-
-                // 2. Determine status and update course
-                const status = isWaitlist ? 'waitlisted' : 'enrolled';
-                const newEnrollmentCount = isWaitlist ? course.currentEnrollment : (course.currentEnrollment + 1);
-
-                const batch = writeBatch(state.db);
-
-                // a) Add new enrollment
-                const enrollmentRef = doc(collection(state.db, 'artifacts', appId, 'public', 'data', 'enrollments'));
-                batch.set(enrollmentRef, {
-                    userId: state.userId,
-                    courseId: course.id,
-                    enrollmentDate: Timestamp.now(),
-                    status: status,
-                    email: state.userEmail,
-                    transactionId: paymentResult.transactionId,
-                });
-
-                // b) Update course enrollment count
-                const courseRef = doc(state.db, 'artifacts', appId, 'public', 'data', 'courses', course.id);
-                batch.update(courseRef, {
-                    currentEnrollment: newEnrollmentCount,
-                });
-
-                await batch.commit();
-                showMessage('success', `SUCCESS: You have been ${status} in ${course.name}!`);
-            } catch (e) {
-                console.error("Enrollment failed:", e);
-                showMessage('error', e.message || "Enrollment process failed.");
-            } finally {
-                updateState({ isLoading: false });
-            }
-        }
-        
-        // --- ACTION HANDLERS (ADMIN) ---
-
-        function handleAdminLogin(key) {
-            if (key === ADMIN_ACCESS_KEY) {
-                updateState({ 
-                    isAdmin: true, 
-                    showLoginModal: false, 
-                    view: 'admin',
-                    userEmail: 'admin@osem.com' // Mock admin email
-                });
-                showMessage('success', "Admin access granted!");
-            } else {
-                showMessage('error', "Invalid Access Key. The demo key is 'osemadmin'.");
-            }
-        }
-
-        async function issueCertificate(enrollment) {
-            if (!state.db || state.isLoading || !state.isAdmin) return;
-            
-            updateState({ isLoading: true, error: null });
-            try {
-                const course = state.courses.find(c => c.id === enrollment.courseId);
-                if (!course) throw new Error("Course not found.");
-
-                const existingCert = state.certificates.find(c => c.userId === enrollment.userId && c.courseId === course.id);
-                if (existingCert) throw new Error("Certificate already issued for this user.");
-
-                const issueDate = new Date();
-                const expirationDate = addDays(issueDate, 730); 
-
-                const certData = {
-                    userId: enrollment.userId,
-                    courseId: enrollment.courseId,
-                    courseName: course.name,
-                    issueDate: Timestamp.fromDate(issueDate),
-                    expirationDate: Timestamp.fromDate(expirationDate),
-                    certificateUrl: `https://osem.com/cert/${uuidv4()}`,
-                    emailSent: false,
-                };
-
-                const batch = writeBatch(state.db);
-
-                // a) Save Certificate
-                const certRef = doc(collection(state.db, 'artifacts', appId, 'public', 'data', 'certificates'));
-                batch.set(certRef, certData);
-
-                // b) Update Enrollment Status
-                const enrollmentRef = doc(state.db, 'artifacts', appId, 'public', 'data', 'enrollments', enrollment.id);
-                batch.update(enrollmentRef, { status: 'completed' });
-
-                await batch.commit();
-
-                // Mock email sending
-                await sendCertificateEmail(enrollment.email, course.name);
-                await updateDoc(certRef, { emailSent: true }); 
-
-                showMessage('success', `Certificate for ${course.name} issued to user ${enrollment.userId.substring(0, 8)}...`);
-
-            } catch (e) {
-                console.error("Certificate issuance failed:", e);
-                showMessage('error', e.message || "Failed to issue certificate.");
-            } finally {
-                updateState({ isLoading: false });
-            }
-        }
-
-        async function saveCourse(courseData) {
-            if (!state.db || state.isLoading || !state.isAdmin) return;
-            updateState({ isLoading: true, error: null });
-
-            try {
-                const courseToSave = {
-                    ...courseData,
-                    capacity: parseInt(courseData.capacity || 20),
-                    price: parseFloat(courseData.price || 0),
-                    durationDays: parseInt(courseData.durationDays || 1),
-                    featured: !!courseData.featured,
-                };
-
-                if (courseData.id) {
-                    // Update existing course
-                    const courseRef = doc(state.db, 'artifacts', appId, 'public', 'data', 'courses', courseData.id);
-                    await updateDoc(courseRef, courseToSave);
-                    showMessage('success', `Course "${courseData.name}" updated successfully.`);
-                } else {
-                    // Add new course
-                    await addDoc(collection(state.db, 'artifacts', appId, 'public', 'data', 'courses'), {
-                        ...courseToSave,
-                        currentEnrollment: 0,
-                    });
-                    showMessage('success', `New course "${courseData.name}" created successfully.`);
-                }
-            } catch (e) {
-                console.error("Course save failed:", e);
-                showMessage('error', e.message || "Failed to save course.");
-            } finally {
-                updateState({ isLoading: false, editingCourse: null });
-            }
-        }
-        
-        async function sendBulkExpirationReminders() {
-            if (!state.db || state.isLoading || !state.isAdmin) return;
-
-            const today = new Date();
-            const ninetyDays = addDays(today, 90);
-            const expiringCertificates = state.certificates.filter(cert => {
-                if (!cert.expirationDate) return false;
-                return cert.expirationDate > today && cert.expirationDate <= ninetyDays;
-            });
-            
-            if (expiringCertificates.length === 0) {
-                return showMessage('info', "No certificates found expiring in the next 90 days.");
-            }
-
-            updateState({ isLoading: true, error: null });
-            let sentCount = 0;
-            
-            try {
-                const batch = writeBatch(state.db);
-
-                for (const cert of expiringCertificates) {
-                    const course = state.courses.find(c => c.id === cert.courseId);
-                    if (course) {
-                        await sendExpirationReminder(state.userEmail, course.name); 
-                        
-                        const certRef = doc(state.db, 'artifacts', appId, 'public', 'data', 'certificates', cert.id);
-                        batch.update(certRef, { 
-                            lastReminderDate: Timestamp.now(), 
-                            reminderSent: true 
-                        });
-                        sentCount++;
-                    }
-                }
-
-                await batch.commit();
-                showMessage('success', `Successfully sent ${sentCount} expiration reminders.`);
-
-            } catch (e) {
-                console.error("Bulk reminder failed:", e);
-                showMessage('error', "Failed to send bulk reminders.");
-            } finally {
-                updateState({ isLoading: false });
-            }
-        }
-
-        // --- UI RENDERING FUNCTIONS ---
-
-        function LoadingOverlay() {
-            if (!state.isLoading) return '';
-            return `
-                <div class="fixed inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center z-50">
-                    <div class="flex items-center space-x-2 text-white text-lg">
-                        <svg class="animate-spin h-6 w-6 text-yellow-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                        </svg>
-                        <span>Processing Request...</span>
-                    </div>
-                </div>
-            `;
-        }
-
-        function Header() {
-            let adminButton;
-            if (state.isAdmin) {
-                adminButton = `<button class="text-red-500 hover:text-red-700 transition duration-150 font-bold" data-action="setView" data-view="admin">Admin Center</button>`;
-            } else {
-                adminButton = `<button class="text-gray-600 hover:text-emerald-600 transition duration-150 font-medium" data-action="toggleLoginModal">Admin Login</button>`;
-            }
-
-            return `
-                <header class="bg-white shadow-md sticky top-0 z-40">
-                    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3 flex justify-between items-center">
-                        <h1 class="text-2xl font-extrabold text-emerald-600 cursor-pointer" data-action="setView" data-view="home">
-                            OSEM Training Center
-                        </h1>
-                        <nav class="hidden md:flex space-x-6 items-center">
-                            <button class="text-gray-600 hover:text-emerald-600 transition duration-150 font-medium" data-action="setView" data-view="catalog">Course Catalog</button>
-                            <button class="text-gray-600 hover:text-emerald-600 transition duration-150 font-medium" data-action="setView" data-view="dashboard">My Dashboard</button>
-                            ${adminButton}
-                            <div class="bg-blue-500 text-white text-xs font-bold px-3 py-1 rounded-full">
-                                ${state.isAdmin ? 'Role: ADMIN' : 'Role: STUDENT'}
-                            </div>
-                        </nav>
-                        <!-- Mobile Menu Icon (Hamburger) -->
-                        <button class="md:hidden text-gray-600 hover:text-emerald-600 focus:outline-none">
-                            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16m-7 6h7"></path></svg>
-                        </button>
-                    </div>
-                </header>
-            `;
-        }
-
-        function CourseCard(course) {
-            const enrollment = state.enrollments.find(e => e.userId === state.userId && e.courseId === course.id);
-            const isFull = course.currentEnrollment >= course.capacity;
-            let buttonText = 'Enroll Now';
-            if (enrollment) {
-                buttonText = 'View Details';
-            } else if (isFull) {
-                buttonText = 'Join Waitlist';
-            }
-            
-            const statusClass = enrollment 
-                ? (enrollment.status === 'enrolled' ? 'bg-emerald-100 text-emerald-800' : enrollment.status === 'completed' ? 'bg-blue-100 text-blue-800' : 'bg-yellow-100 text-yellow-800')
-                : '';
-
-            const statusHtml = enrollment 
-                ? `<div class="text-sm font-medium p-2 rounded-lg text-center ${statusClass}">Status: ${enrollment.status.toUpperCase()}</div>`
-                : '';
-
-            return `
-                <div class="bg-white p-6 rounded-xl shadow-lg hover:shadow-xl transition duration-300 flex flex-col justify-between border-t-4 border-emerald-500">
-                    <div>
-                        <span class="text-sm font-semibold text-gray-500 bg-gray-100 px-3 py-1 rounded-full">${course.specialty}</span>
-                        <h3 class="text-2xl font-bold mt-2 text-gray-900">${course.name}</h3>
-                        <p class="text-gray-600 mt-1 line-clamp-2">${course.description}</p>
-                    </div>
-                    <div class="mt-4 pt-4 border-t border-gray-100">
-                        <p class="text-lg font-bold text-emerald-600">$${course.price.toFixed(2)}</p>
-                        <p class="text-sm text-gray-500 mb-4">Date: ${course.date}</p>
-                        ${statusHtml}
-                        <button 
-                            data-action="viewDetails" data-course-id="${course.id}"
-                            class="mt-4 w-full bg-blue-600 text-white py-2 rounded-lg font-semibold hover:bg-blue-700 transition duration-150 shadow-md"
-                        >
-                            ${buttonText}
-                        </button>
-                    </div>
-                </div>
-            `;
-        }
-        
-        function renderHomePage() {
-            const featured = state.courses.filter(c => c.featured).slice(0, 3);
-            const featuredHtml = featured.length > 0 ? `
-                <div class="py-16">
-                    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-                        <h3 class="text-3xl font-bold text-gray-900 mb-8 border-b-2 border-emerald-200 pb-2">Featured Programs</h3>
-                        <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
-                            ${featured.map(CourseCard).join('')}
-                        </div>
-                    </div>
-                </div>
-            ` : '';
-
-            return `
-                <div class="min-h-screen bg-gray-50">
-                    <div class="bg-emerald-50 pt-16 pb-24 border-b border-emerald-100">
-                        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
-                            <h2 class="text-5xl font-extrabold text-gray-900 sm:text-6xl">
-                                Elevate Your Healthcare Career
-                            </h2>
-                            <p class="mt-4 text-xl text-gray-600 max-w-3xl mx-auto">
-                                Trusted certification courses and public health education. Track your credentials and never miss an expiration date.
-                            </p>
-                            <div class="mt-8">
-                                <button 
-                                    data-action="setView" data-view="catalog"
-                                    class="px-8 py-4 bg-emerald-600 text-white text-lg font-semibold rounded-xl shadow-lg hover:bg-emerald-700 transition duration-300 transform hover:scale-105"
-                                >
-                                    View All Courses
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                    ${featuredHtml}
-                    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
-                        <div class="bg-blue-600 p-8 rounded-2xl shadow-xl text-white flex flex-col md:flex-row justify-between items-center">
-                            <div>
-                                <h4 class="text-3xl font-bold">New Year, New Certifications!</h4>
-                                <p class="mt-2 text-blue-100">Use code OSEM20 for 20% off all online courses this month.</p>
-                            </div>
-                            <button class="mt-4 md:mt-0 bg-white text-blue-600 font-semibold px-6 py-3 rounded-xl hover:bg-gray-100 transition shadow-lg">
-                                Explore Deals
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            `;
-        }
-
-        function renderCourseCatalog() {
-            const specialties = [...new Set(state.courses.map(c => c.specialty))];
-            const locations = [...new Set(state.courses.map(c => c.location))];
-
-            const filteredCourses = state.courses.filter(course => {
-                const searchMatch = course.name.toLowerCase().includes(state.searchTerm.toLowerCase()) ||
-                                    course.description.toLowerCase().includes(state.searchTerm.toLowerCase());
-                const specialtyMatch = state.filterSpecialty === 'All' || course.specialty === state.filterSpecialty;
-                const locationMatch = state.filterLocation === 'All' || course.location === state.filterLocation;
-
-                return searchMatch && specialtyMatch && locationMatch;
-            });
-            
-            const coursesHtml = filteredCourses.length > 0 ? filteredCourses.map(CourseCard).join('') : `
-                <p class="col-span-full text-center text-gray-500">No courses match your criteria.</p>
-            `;
-
-            return `
-                <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 min-h-screen">
-                    <h2 class="text-4xl font-bold text-gray-900 mb-8">Full Course Catalog</h2>
-
-                    <div class="bg-white p-6 rounded-xl shadow-lg mb-8 grid grid-cols-1 md:grid-cols-4 gap-4">
-                        <input
-                            type="text"
-                            placeholder="Search by title or keyword..."
-                            value="${state.searchTerm}"
-                            data-action="setSearchTerm"
-                            class="col-span-1 md:col-span-2 p-3 border border-gray-300 rounded-lg focus:ring-emerald-500 focus:border-emerald-500"
-                        />
-                        <select
-                            data-action="setFilterSpecialty"
-                            class="p-3 border border-gray-300 rounded-lg focus:ring-emerald-500 focus:border-emerald-500"
-                        >
-                            <option value="All">All Specialties</option>
-                            ${specialties.map(s => `<option value="${s}" ${state.filterSpecialty === s ? 'selected' : ''}>${s}</option>`).join('')}
-                        </select>
-                        <select
-                            data-action="setFilterLocation"
-                            class="p-3 border border-gray-300 rounded-lg focus:ring-emerald-500 focus:border-emerald-500"
-                        >
-                            <option value="All">All Locations</option>
-                            ${locations.map(l => `<option value="${l}" ${state.filterLocation === l ? 'selected' : ''}>${l}</option>`).join('')}
-                        </select>
-                    </div>
-
-                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8" id="course-cards-container">
-                        ${coursesHtml}
-                    </div>
-                </div>
-            `;
-        }
-        
-        function renderCourseDetails() {
-            const course = state.selectedCourse;
-            if (!course) return `<p class="p-8 text-center">Course not found. Click <button class="text-blue-600" data-action="setView" data-view="catalog">here</button> to go to the catalog.</p>`;
-
-            const enrollment = state.enrollments.find(e => e.userId === state.userId && e.courseId === course.id);
-            const isFull = course.currentEnrollment >= course.capacity;
-            const remainingSeats = course.capacity - course.currentEnrollment;
-            
-            let actionButton;
-            if (enrollment) {
-                actionButton = `
-                    <div class="p-4 bg-blue-100 text-blue-800 rounded-lg text-center font-semibold">
-                        You are already ${enrollment.status.toUpperCase()} in this course.
-                    </div>
-                `;
-            } else if (isFull) {
-                actionButton = `
-                    <button 
-                        data-action="enroll" data-course-id="${course.id}" data-is-waitlist="true"
-                        ${state.isLoading ? 'disabled' : ''}
-                        class="w-full bg-yellow-500 text-white py-3 rounded-lg text-lg font-semibold hover:bg-yellow-600 transition disabled:bg-gray-400 shadow-lg"
-                    >
-                        ${state.isLoading ? 'Processing...' : 'Join Waitlist (Course Full)'}
-                    </button>
-                `;
-            } else {
-                actionButton = `
-                    <button 
-                        data-action="enroll" data-course-id="${course.id}" data-is-waitlist="false"
-                        ${state.isLoading ? 'disabled' : ''}
-                        class="w-full bg-emerald-600 text-white py-3 rounded-lg text-lg font-semibold hover:bg-emerald-700 transition disabled:bg-gray-400 shadow-lg"
-                    >
-                        ${state.isLoading ? 'Processing Payment...' : 'Enroll Now - $' + course.price.toFixed(2) + ` (${remainingSeats} seats left)`}
-                    </button>
-                `;
-            }
-            
-            const errorHtml = state.error ? `<p class="text-red-500 mt-3 text-center">${state.error}</p>` : '';
-
-            return `
-                <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-12 min-h-screen">
-                    <button 
-                        data-action="setView" data-view="catalog"
-                        class="flex items-center text-emerald-600 hover:text-emerald-800 mb-6 font-medium"
-                    >
-                        <svg class="w-5 h-5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path></svg>
-                        Back to Catalog
-                    </button>
-                    <div class="bg-white p-8 rounded-2xl shadow-xl">
-                        <span class="text-md font-semibold text-white bg-emerald-500 px-4 py-1 rounded-full">${course.specialty}</span>
-                        <h2 class="text-4xl font-extrabold text-gray-900 mt-3">${course.name}</h2>
-                        <p class="text-xl text-gray-600 mt-2">Provided by ${course.provider}</p>
-
-                        <div class="mt-6 grid grid-cols-2 gap-4 text-gray-700 border-t pt-4">
-                            <div>
-                                <p class="font-semibold">Price:</p>
-                                <p class="text-2xl text-emerald-600 font-bold">$${course.price.toFixed(2)}</p>
-                            </div>
-                            <div>
-                                <p class="font-semibold">Schedule & Location:</p>
-                                <p>${course.date} in ${course.location}</p>
-                            </div>
-                            <div>
-                                <p class="font-semibold">Duration:</p>
-                                <p>${course.durationDays} Days</p>
-                            </div>
-                            <div>
-                                <p class="font-semibold">Capacity:</p>
-                                <p>${course.currentEnrollment} / ${course.capacity} enrolled</p>
-                            </div>
-                        </div>
-
-                        <div class="mt-6">
-                            <h3 class="text-2xl font-bold text-gray-900 mb-2">Course Description</h3>
-                            <p class="text-gray-700 leading-relaxed">${course.description}</p>
-                        </div>
-
-                        <div class="mt-8 pt-6 border-t border-gray-200">
-                            ${actionButton}
-                            ${errorHtml}
-                        </div>
-                    </div>
-                </div>
-            `;
-        }
-
-        function renderUserDashboard() {
-            const userEnrollments = state.enrollments.filter(e => e.userId === state.userId);
-            const userCertificates = state.certificates.filter(c => c.userId === state.userId);
-            
-            const enrollmentsHtml = userEnrollments.length > 0 ? userEnrollments.map(e => {
-                const course = state.courses.find(c => c.id === e.courseId);
-                if (!course) return '';
-                const statusClass = e.status === 'enrolled' ? 'text-blue-600' : e.status === 'completed' ? 'text-emerald-600' : 'text-yellow-600';
-                return `
-                    <div class="p-4 bg-gray-100 rounded-lg flex justify-between items-center shadow-sm">
-                        <div>
-                            <p class="text-lg font-semibold text-gray-800">${course.name}</p>
-                            <p class="text-sm font-medium ${statusClass}">
-                                Status: ${e.status.toUpperCase()}
-                            </p>
-                        </div>
-                        <button 
-                            data-action="viewDetails" data-course-id="${course.id}"
-                            class="text-sm bg-white border border-gray-300 px-4 py-2 rounded-lg hover:bg-gray-50"
-                        >
-                            View Course
-                        </button>
-                    </div>
-                `;
-            }).join('') : `
-                <p class="text-gray-500">You are not currently enrolled in any courses. Check the <button class="text-emerald-600 hover:underline" data-action="setView" data-view="catalog">Catalog</button>!</p>
-            `;
-
-            const certificatesHtml = userCertificates.length > 0 ? userCertificates.map(c => {
-                const isExpired = c.expirationDate < new Date();
-                const expirationText = c.expirationDate ? c.expirationDate.toLocaleDateString() : 'N/A';
-                const statusClass = isExpired ? 'bg-red-100 text-red-800' : 'bg-emerald-100 text-emerald-800';
-                
-                return `
-                    <div class="p-4 bg-white rounded-lg shadow-md flex justify-between items-center">
-                        <div>
-                            <p class="text-lg font-semibold text-gray-800">${c.courseName}</p>
-                            <p class="text-sm text-gray-500">Issued: ${c.issueDate?.toLocaleDateString()}</p>
-                        </div>
-                        <div class="text-right">
-                            <p class="text-sm font-bold p-1 rounded ${statusClass}">
-                                ${isExpired ? 'EXPIRED' : `Expires: ${expirationText}`}
-                            </p>
-                            <a 
-                                href="${c.certificateUrl}" target="_blank" rel="noopener noreferrer"
-                                class="mt-2 text-sm text-blue-600 hover:underline inline-block"
-                            >
-                                Download Certificate (MOCK)
-                            </a>
-                        </div>
-                    </div>
-                `;
-            }).join('') : `
-                <p class="text-gray-500">You have no completed certifications yet.</p>
-            `;
-
-            return `
-                <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 min-h-screen">
-                    <h2 class="text-4xl font-bold text-gray-900 mb-8">My Professional Dashboard</h2>
-                    <div class="bg-white p-6 rounded-xl shadow-lg mb-8">
-                        <p class="text-xl font-semibold text-gray-700">User Role: <span class="text-blue-600">${state.isAdmin ? 'ADMIN' : 'STUDENT'}</span></p>
-                        <p class="text-lg text-gray-500">User ID: <span class="text-emerald-600 text-sm break-all">${state.userId}</span></p>
-                        <p class="text-lg text-gray-500">Mock Email: ${state.userEmail}</p>
-                    </div>
-
-                    <div class="mb-12">
-                        <h3 class="text-2xl font-bold text-gray-900 mb-4 border-b pb-2">My Enrollments</h3>
-                        <div class="space-y-4">
-                            ${enrollmentsHtml}
-                        </div>
-                    </div>
-
-                    <div>
-                        <h3 class="text-2xl font-bold text-gray-900 mb-4 border-b pb-2">My Certificates</h3>
-                        <div class="space-y-4">
-                            ${certificatesHtml}
-                        </div>
-                    </div>
-                </div>
-            `;
-        }
-
-        function renderAdminDashboard() {
-            if (!state.isAdmin) {
-                return `
-                    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 min-h-screen">
-                        <div class="bg-red-100 border-l-4 border-red-500 text-red-700 p-6 rounded-xl shadow-md" role="alert">
-                            <p class="font-bold text-xl">Access Denied</p>
-                            <p class="mt-2">You must be logged in as an administrator to access the Course Management and Certificate Tools.</p>
-                            <button class="mt-4 bg-red-500 text-white font-semibold px-4 py-2 rounded-lg hover:bg-red-600 transition" data-action="toggleLoginModal">
-                                Admin Login
-                            </button>
-                        </div>
-                    </div>
-                `;
-            }
-
-            const expiringCertificates = state.certificates.filter(cert => {
-                const today = new Date();
-                const ninetyDays = addDays(today, 90);
-                if (!cert.expirationDate) return false;
-                return cert.expirationDate > today && cert.expirationDate <= ninetyDays;
-            });
-            
-            const renderCourseManagement = () => {
-                const coursesHtml = state.courses.map(course => `
-                    <tr key="${course.id}">
-                        <td class="px-6 py-4 whitespace-nowrap">
-                            <div class="text-sm font-medium text-gray-900">${course.name}</div>
-                            <div class="text-sm text-gray-500">${course.specialty}</div>
-                        </td>
-                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                            ${course.date} (${course.location})
-                        </td>
-                        <td class="px-6 py-4 whitespace-nowrap text-sm">
-                            <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${course.currentEnrollment >= course.capacity ? 'bg-red-100 text-red-800' : 'bg-blue-100 text-blue-800'}">
-                                ${course.currentEnrollment} / ${course.capacity}
-                            </span>
-                        </td>
-                        <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                            <button data-action="editCourse" data-course-id="${course.id}" class="text-indigo-600 hover:text-indigo-900 mr-3">Edit</button>
-                            <button data-action="issueCert" data-course-id="${course.id}" class="text-green-600 hover:text-green-900">Issue Cert (1st Enrolled)</button>
-                        </td>
-                    </tr>
-                `).join('');
-
-                return `
-                    <div class="mt-8">
-                        <div class="flex justify-between items-center mb-6">
-                            <h3 class="text-2xl font-bold text-gray-900">Manage Courses</h3>
-                            <button 
-                                data-action="createCourse"
-                                class="bg-emerald-600 text-white px-4 py-2 rounded-lg hover:bg-emerald-700 transition flex items-center shadow-md"
-                            >
-                                <svg class="w-5 h-5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path></svg>
-                                Add New Course
-                            </button>
-                        </div>
-
-                        <div class="bg-white rounded-xl shadow-lg overflow-x-auto">
-                            <table class="min-w-full divide-y divide-gray-200">
-                                <thead class="bg-gray-50">
-                                    <tr>
-                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Course</th>
-                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date/Location</th>
-                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Enrollment</th>
-                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
-                                    </tr>
-                                </thead>
-                                <tbody class="bg-white divide-y divide-gray-200">
-                                    ${coursesHtml}
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                `;
-            };
-
-            const renderCertificateManagement = () => {
-                const certsHtml = expiringCertificates.length > 0 ? expiringCertificates.map(cert => `
-                    <tr key="${cert.id}" class="hover:bg-red-50">
-                        <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${cert.courseName}</td>
-                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${cert.userId.substring(0, 8)}...</td>
-                        <td class="px-6 py-4 whitespace-nowrap text-sm text-red-600 font-semibold">
-                            ${cert.expirationDate.toLocaleDateString()}
-                        </td>
-                        <td class="px-6 py-4 whitespace-nowrap text-sm">
-                            <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${cert.expirationDate < addDays(new Date(), 30) ? 'bg-red-100 text-red-800' : 'bg-yellow-100 text-yellow-800'}">
-                                Expiring Soon
-                            </span>
-                        </td>
-                    </tr>
-                `).join('') : `
-                    <tr>
-                        <td colSpan="4" class="px-6 py-4 text-center text-gray-500">No certificates are expiring in the next 90 days.</td>
-                    </tr>
-                `;
-
-                return `
-                    <div class="mt-8">
-                        <div class="flex justify-between items-center mb-6">
-                            <h3 class="text-2xl font-bold text-gray-900">Expiring Certificates (${expiringCertificates.length})</h3>
-                            <button 
-                                data-action="sendBulkReminders"
-                                ${state.isLoading || expiringCertificates.length === 0 ? 'disabled' : ''}
-                                class="bg-red-500 text-white px-4 py-2 rounded-lg hover:bg-red-600 transition flex items-center shadow-md disabled:bg-gray-400"
-                            >
-                                <svg class="w-5 h-5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v2a3 3 0 11-6 0v-2m6 0H9"></path></svg>
-                                ${state.isLoading ? 'Sending...' : 'Send Bulk Reminders'}
-                            </button>
-                        </div>
-
-                        <div class="bg-white rounded-xl shadow-lg overflow-x-auto">
-                            <table class="min-w-full divide-y divide-gray-200">
-                                <thead class="bg-gray-50">
-                                    <tr>
-                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Certificate</th>
-                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">User ID</th>
-                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Expiration Date</th>
-                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-                                    </tr>
-                                </thead>
-                                <tbody class="bg-white divide-y divide-gray-200">
-                                    ${certsHtml}
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                `;
-            };
-
-            const adminContent = state.adminView === 'courses' ? renderCourseManagement() : renderCertificateManagement();
-
-            return `
-                <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 min-h-screen">
-                    <h2 class="text-4xl font-bold text-gray-900 mb-8">Admin Center</h2>
-                    
-                    <div class="border-b border-gray-200 mb-6">
-                        <nav class="-mb-px flex space-x-8" aria-label="Tabs">
-                            <button
-                                data-action="setAdminView" data-admin-view="courses"
-                                class="${state.adminView === 'courses' ? 'border-emerald-500 text-emerald-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'} whitespace-nowrap py-3 px-1 border-b-2 font-medium text-sm transition"
-                            >
-                                Course & Enrollment Management
-                            </button>
-                            <button
-                                data-action="setAdminView" data-admin-view="certs"
-                                class="${state.adminView === 'certs' ? 'border-emerald-500 text-emerald-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'} whitespace-nowrap py-3 px-1 border-b-2 font-medium text-sm transition"
-                            >
-                                Certificate Expiration Tracking
-                            </button>
-                        </nav>
-                    </div>
-
-                    ${adminContent}
-
-                    ${state.error ? `<div class="mt-6 p-4 bg-red-100 text-red-700 rounded-lg">${state.error}</div>` : ''}
-                </div>
-            `;
-        }
-        
-        function CourseForm(initialData) {
-            const data = initialData || {
-                name: '', specialty: '', provider: '', description: '', capacity: 20, price: 0.00, date: new Date().toISOString().split('T')[0], location: 'Online', durationDays: 1, featured: false
-            };
-            const isEditing = !!initialData?.id;
-
-            return `
-                <div class="fixed inset-0 bg-gray-900 bg-opacity-80 flex items-center justify-center z-50 p-4">
-                    <form id="courseForm" class="bg-white p-8 rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
-                        <h3 class="text-2xl font-bold mb-6 text-gray-900">${isEditing ? 'Edit Course' : 'Create New Course'}</h3>
-                        
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <label class="block">
-                                <span class="text-gray-700">Course Name</span>
-                                <input type="text" name="name" value="${data.name}" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border" />
-                            </label>
-                            <label class="block">
-                                <span class="text-gray-700">Specialty</span>
-                                <input type="text" name="specialty" value="${data.specialty}" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border" />
-                            </label>
-                            <label class="block">
-                                <span class="text-gray-700">Provider</span>
-                                <input type="text" name="provider" value="${data.provider}" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border" />
-                            </label>
-                            <label class="block">
-                                <span class="text-gray-700">Date</span>
-                                <input type="date" name="date" value="${data.date}" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border" />
-                            </label>
-                            <label class="block">
-                                <span class="text-gray-700">Location</span>
-                                <input type="text" name="location" value="${data.location}" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border" />
-                            </label>
-                            <label class="block">
-                                <span class="text-gray-700">Capacity</span>
-                                <input type="number" name="capacity" value="${data.capacity}" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border" />
-                            </label>
-                            <label class="block">
-                                <span class="text-gray-700">Price ($)</span>
-                                <input type="number" name="price" value="${data.price.toFixed(2)}" required step="0.01" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border" />
-                            </label>
-                            <label class="flex items-center space-x-2 mt-6">
-                                <input type="checkbox" name="featured" ${data.featured ? 'checked' : ''} class="rounded border-gray-300 text-emerald-600 shadow-sm" />
-                                <span class="text-gray-700">Feature on Homepage</span>
-                            </label>
-                        </div>
-                        <label class="block mt-4">
-                            <span class="text-gray-700">Description (Flyer Details)</span>
-                            <textarea name="description" required rows="3" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">${data.description}</textarea>
-                        </label>
-
-                        <div class="mt-6 flex justify-end space-x-3">
-                            <button type="button" data-action="cancelEdit" class="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition">Cancel</button>
-                            <button type="submit" ${state.isLoading ? 'disabled' : ''} class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition disabled:bg-gray-400">
-                                ${state.isLoading ? 'Saving...' : (isEditing ? 'Save Changes' : 'Create Course')}
-                            </button>
-                        </div>
-                    </form>
-                </div>
-            `;
-        }
-
-        function AdminLoginModal() {
-            if (!state.showLoginModal) return '';
-            
-            return `
-                <div class="fixed inset-0 bg-gray-900 bg-opacity-80 flex items-center justify-center z-50 p-4">
-                    <form id="adminLoginForm" class="bg-white p-8 rounded-xl shadow-2xl w-full max-w-sm">
-                        <h3 class="text-2xl font-bold mb-6 text-gray-900">Admin Login</h3>
-                        <p class="text-sm text-gray-600 mb-4 font-semibold">🔑 Demo Key: <span class="text-red-600 font-bold">osemadmin</span></p>
-                        
-                        <label class="block">
-                            <span class="text-gray-700 font-medium">Access Key</span>
-                            <input type="password" name="adminKey" required class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm p-3 border focus:ring-red-500 focus:border-red-500" />
-                        </label>
-
-                        <div class="mt-6 flex justify-end space-x-3">
-                            <button type="button" data-action="toggleLoginModal" class="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition">Cancel</button>
-                            <button type="submit" class="px-4 py-2 bg-red-600 text-white rounded-lg font-semibold hover:bg-red-700 transition">Log In</button>
-                        </div>
-                    </form>
-                </div>
-            `;
-        }
-
-        // --- MAIN RENDER FUNCTION ---
-
-        function render() {
-            if (!state.isAuthReady) {
-                appRoot.innerHTML = `<div class="flex justify-center items-center h-screen text-xl text-gray-600">Connecting to OSEM Database...</div>`;
-                return;
-            }
-
-            let content;
-            switch (state.view) {
-                case 'catalog':
-                    content = renderCourseCatalog();
-                    break;
-                case 'details':
-                    content = renderCourseDetails();
-                    break;
-                case 'dashboard':
-                    content = renderUserDashboard();
-                    break;
-                case 'admin':
-                    content = renderAdminDashboard();
-                    break;
-                case 'home':
-                default:
-                    content = renderHomePage();
-                    break;
-            }
-            
-            let modalHtml = state.editingCourse ? CourseForm(state.editingCourse) : AdminLoginModal();
-
-            // Main layout update
-            appRoot.innerHTML = `
-                ${Header()}
-                <main>
-                    ${content}
-                </main>
-                ${LoadingOverlay()}
-                ${modalHtml}
-            `;
-            
-            // Re-attach event listeners after rendering (Delegation is key)
-            attachEventListeners();
-        }
-
-        // --- EVENT DELEGATION ---
-
-        function attachEventListeners() {
-            appRoot.onclick = (e) => {
-                const target = e.target.closest('[data-action]');
-                if (!target) return;
-                
-                const action = target.getAttribute('data-action');
-                
-                if (action === 'setView') {
-                    updateState({ view: target.getAttribute('data-view') });
-                } else if (action === 'viewDetails') {
-                    const courseId = target.getAttribute('data-course-id');
-                    const course = state.courses.find(c => c.id === courseId);
-                    updateState({ selectedCourse: course, view: 'details' });
-                } else if (action === 'enroll') {
-                    const courseId = target.getAttribute('data-course-id');
-                    const isWaitlist = target.getAttribute('data-is-waitlist') === 'true';
-                    handleEnrollment(courseId, isWaitlist);
-                } else if (action === 'setAdminView') {
-                    updateState({ adminView: target.getAttribute('data-admin-view') });
-                } else if (action === 'sendBulkReminders') {
-                    sendBulkExpirationReminders();
-                } else if (action === 'createCourse') {
-                    updateState({ editingCourse: {}, showLoginModal: false });
-                } else if (action === 'editCourse') {
-                    const courseId = target.getAttribute('data-course-id');
-                    const course = state.courses.find(c => c.id === courseId);
-                    updateState({ editingCourse: course, showLoginModal: false });
-                } else if (action === 'cancelEdit') {
-                    updateState({ editingCourse: null, showLoginModal: false });
-                } else if (action === 'toggleLoginModal') {
-                    updateState({ showLoginModal: !state.showLoginModal, editingCourse: null });
-                } else if (action === 'issueCert') {
-                    const courseId = target.getAttribute('data-course-id');
-                    // Find the first user who is enrolled and hasn't completed
-                    const enrollment = state.enrollments.find(e => e.courseId === courseId && e.status === 'enrolled');
-                    if (enrollment) {
-                         issueCertificate(enrollment);
-                    } else {
-                         showMessage('info', "No 'enrolled' user found for this course to issue a certificate.");
-                    }
-                }
-            };
-            
-            appRoot.onchange = (e) => {
-                const target = e.target;
-                const action = target.getAttribute('data-action');
-                
-                if (state.view === 'catalog') {
-                    if (action === 'setSearchTerm') {
-                        // Debouncing for large applications would be ideal, but for now, direct update.
-                        updateState({ searchTerm: target.value }, false);
-                        render(); // Force re-render for search filter
-                    } else if (action === 'setFilterSpecialty') {
-                        updateState({ filterSpecialty: target.value });
-                    } else if (action === 'setFilterLocation') {
-                        updateState({ filterLocation: target.value });
-                    }
-                }
-            };
-
-            appRoot.onsubmit = (e) => {
-                e.preventDefault();
-                
-                if (e.target.id === 'courseForm') {
-                    const form = e.target;
-                    const formData = new FormData(form);
-                    const courseData = { id: state.editingCourse?.id };
-
-                    for (const [key, value] of formData.entries()) {
-                        if (key === 'featured') {
-                            courseData[key] = true;
-                        } else {
-                            courseData[key] = value;
-                        }
-                    }
-                    if (!courseData.hasOwnProperty('featured')) {
-                        courseData.featured = false;
-                    }
-                    
-                    saveCourse(courseData);
-                } else if (e.target.id === 'adminLoginForm') {
-                    const form = e.target;
-                    const formData = new FormData(form);
-                    const key = formData.get('adminKey');
-                    handleAdminLogin(key);
-                }
-            }
-        }
-
-        // Start the application
-        window.onload = initFirebase;
-
-    </script>
-</body>
-</html>
+        console.log("Registration successfully saved to Firestore.");
+    } catch (error) {
+        console.error("Error saving registration:", error);
+    }
+  };
+
+
+  return (
+    <div className="min-h-screen flex">
+      {/* Mobile Menu Button */}
+      <div className="lg:hidden fixed top-0 left-0 z-40 p-4">
+        <button onClick={() => setIsSidebarOpen(true)} className="p-2 text-indigo-700 bg-white rounded-full shadow-lg">
+          <Menu className="w-6 h-6" />
+        </button>
+      </div>
+
+      {/* Sidebar Overlay for Mobile */}
+      {isSidebarOpen && (
+        <div 
+          className="fixed inset-0 bg-black opacity-50 z-20 lg:hidden" 
+          onClick={() => setIsSidebarOpen(false)}
+        />
+      )}
+
+      {/* Sidebar Component */}
+      <Sidebar 
+        currentPage={currentPage} 
+        setCurrentPage={setCurrentPage} 
+        isSidebarOpen={isSidebarOpen}
+        setIsSidebarOpen={setIsSidebarOpen}
+        isAuthReady={isAuthReady}
+        isAdmin={isAdmin}
+        userId={userId}
+      />
+
+      {/* Main Content Area */}
+      <PageContent 
+        currentPage={currentPage} 
+        onEnrollClick={handleEnrollClick}
+        registrations={registrations} // Pass live data to AdminView
+      />
+      
+      {/* Enrollment Modal */}
+      {showEnrollmentModal && selectedCourseToEnroll && (
+        <EnrollmentFormModal 
+            course={selectedCourseToEnroll} 
+            onClose={() => setShowEnrollmentModal(false)}
+            onEnrollSubmit={handleEnrollmentSubmit}
+        />
+      )}
+    </div>
+  );
+};
+
+export default App;
